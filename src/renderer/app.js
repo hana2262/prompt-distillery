@@ -659,7 +659,7 @@ const App = {
               @click="handlePaste"
               class="flex-1 py-2 px-4 bg-gray-700 rounded-lg text-sm font-medium hover:bg-gray-600"
             >
-              粘贴/输入
+              输入提示词
             </button>
           </div>
 
