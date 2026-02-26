@@ -13,6 +13,7 @@
    - **Task Level**: 每完成一个 Plan 中的 Task (小钩子)，必须执行一次 `git commit`。
    - **Message Format**: 使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范，格式如 `feat: add clipboard monitor`、`fix: window resize bug`。
    - **Pre-push**: 在完成一个 Milestone 之前，禁止 `git push` 到远程分支。
+   - **PR Creation**: 完成 Milestone 后，必须使用 `gh pr create` 创建 Pull Request，合并到 main 分支。
 
 ## 3. 分形文档结构 (Fractal Documentation)
 AI 在进入任何目录时，必须优先读取该目录下的 `README.md`。
