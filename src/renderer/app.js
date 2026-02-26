@@ -173,16 +173,23 @@ const App = {
     async function handlePaste() {
       try {
         const text = await window.electronAPI.clipboard.read();
-        if (text) {
-          promptInput.value = text;
-          currentView.value = 'input';
-        }
+        promptInput.value = text || '';
+        currentView.value = 'input';
       } catch (err) {
         console.error('Failed to paste:', err);
+        currentView.value = 'input';
       }
     }
 
     function showPromptInput() {
+      currentView.value = 'input';
+      promptInput.value = '';
+      templateName.value = '';
+      templateCategory.value = '';
+    }
+
+    // 保留此函数以备后用
+    function newPrompt() {
       currentView.value = 'input';
       promptInput.value = '';
       templateName.value = '';
@@ -652,13 +659,7 @@ const App = {
               @click="handlePaste"
               class="flex-1 py-2 px-4 bg-gray-700 rounded-lg text-sm font-medium hover:bg-gray-600"
             >
-              粘贴
-            </button>
-            <button
-              @click="showPromptInput"
-              class="flex-1 py-2 px-4 bg-gray-700 rounded-lg text-sm font-medium hover:bg-gray-600"
-            >
-              输入
+              粘贴/输入
             </button>
           </div>
 
