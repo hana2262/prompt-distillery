@@ -9,6 +9,10 @@
 1. **Plan Mode First**: 任何超过 1 个文件的修改，必须先使用 `--permission-mode plan` 生成计划。
 2. **Checklist Update**: 每次修改代码后，必须更新 `.claude/plan.md` 中的进度。
 3. **Docs Sync**: 修改代码后，**必须**检查并更新当前模块的 `README.md` 中的接口定义。如果不更新文档，视为任务未完成。
+4. **Git Commit Policy**:
+   - **Task Level**: 每完成一个 Plan 中的 Task (小钩子)，必须执行一次 `git commit`。
+   - **Message Format**: 使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范，格式如 `feat: add clipboard monitor`、`fix: window resize bug`。
+   - **Pre-push**: 在完成一个 Milestone 之前，禁止 `git push` 到远程分支。
 
 ## 3. 分形文档结构 (Fractal Documentation)
 AI 在进入任何目录时，必须优先读取该目录下的 `README.md`。
