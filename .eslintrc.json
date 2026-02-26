@@ -1,0 +1,18 @@
+{
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2021": true
+  },
+  "extends": [
+    "eslint:recommended",
+    "prettier"
+  ],
+  "rules": {
+    "max-lines-per-function": ["error", 40],
+    "max-depth": ["error", 3],
+    "complexity": ["error", 10],
+    "no-var": "error",
+    "no-console": "warn"
+  }
+}
