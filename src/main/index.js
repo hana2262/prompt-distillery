@@ -69,6 +69,18 @@ function createWindow() {
   const mode = settings.window.mode || 'standard';
   const config = WINDOW_MODES[mode];
 
+  // 加载应用图标
+  const iconPath = path.join(__dirname, '../../assets/icon.png');
+  let appIcon;
+  try {
+    appIcon = nativeImage.createFromPath(iconPath);
+    if (appIcon.isEmpty()) {
+      appIcon = undefined;
+    }
+  } catch {
+    appIcon = undefined;
+  }
+
   mainWindow = new BrowserWindow({
     width: config.width,
     height: config.height,
@@ -77,10 +89,12 @@ function createWindow() {
     resizable: config.resizable,
     frame: true,
     show: false,
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webSecurity: false
     }
   });
 
@@ -407,6 +421,38 @@ ipcMain.handle('clipboard:get-status', () => {
     enabled: settings.clipboardMonitor?.enabled || false,
     ignoreKeywords: settings.clipboardMonitor?.ignoreKeywords || []
   };
+});
+
+// 背景图片保存路径
+function getBackgroundPath() {
+  const userDataPath = app.getPath('userData');
+  const bgPath = path.join(userDataPath, 'backgrounds');
+  if (!fs.existsSync(bgPath)) {
+    fs.mkdirSync(bgPath, { recursive: true });
+  }
+  return bgPath;
+}
+
+// 保存背景图片到文件系统
+ipcMain.handle('background:save', async (event, base64Data) => {
+  try {
+    const bgDir = getBackgroundPath();
+    const filePath = path.join(bgDir, 'bg.jpg');
+
+    // 移除 data:image/xxx;base64, 前缀
+    const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64, 'base64');
+
+    fs.writeFileSync(filePath, buffer);
+    console.log('Background image saved to:', filePath);
+
+    // 返回固定标识符
+    // 返回标记
+    return '__local_bg__';
+  } catch (err) {
+    console.error('Failed to save background image:', err);
+    return null;
+  }
 });
 
 app.whenReady().then(() => {

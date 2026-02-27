@@ -1,4 +1,4 @@
-const { createApp, ref, computed, onMounted } = Vue;
+const { createApp, ref, computed, onMounted, watch } = Vue;
 
 const App = {
   setup() {
@@ -9,11 +9,14 @@ const App = {
     const searchQuery = ref('');
     const currentView = ref('main');
     const showSettings = ref(false);
+    const showAddBackground = ref(false);
+    const newBackgroundUrl = ref('');
     const settings = ref({
       theme: {
         accentColor: '#10B981',
         backgroundImage: '',
-        glassEffect: true
+        glassEffect: true,
+        customBackgrounds: []
       }
     });
     const recentTemplates = ref([]);
@@ -24,6 +27,7 @@ const App = {
     const templateName = ref('');
     const templateCategory = ref('');
 
+    const viewHistory = ref([]);
     const selectedCategory = ref('全部');
     const categories = computed(() => {
       const cats = new Set(['全部']);
@@ -62,19 +66,144 @@ const App = {
       });
     });
 
-    const accentColorStyle = computed(() => ({
-      '--accent': settings.value.theme.accentColor
-    }));
+    const accentColorStyle = computed(() => {
+      const style = {
+        '--accent': settings.value.theme.accentColor,
+        backgroundColor: 'rgba(17, 24, 39, 0.85)'
+      };
+      if (settings.value.theme.backgroundImage) {
+        style.backgroundImage = `url(${settings.value.theme.backgroundImage})`;
+        style.backgroundSize = 'cover';
+        style.backgroundPosition = 'center';
+      }
+      if (settings.value.theme.glassEffect) {
+        style.backdropFilter = 'blur(12px)';
+      }
+      return style;
+    });
 
     async function loadSettings() {
       try {
+        // 从 localStorage 加载主题设置（包含自定义背景）
+        const storedTheme = localStorage.getItem('themeSettings');
+        if (storedTheme) {
+          const themeData = JSON.parse(storedTheme);
+          settings.value.theme = { ...settings.value.theme, ...themeData };
+        }
+        // 从 Electron API 加载其他设置（不覆盖 theme）
         const loaded = await window.electronAPI.settings.get();
         if (loaded) {
-          settings.value = loaded;
+          // 只更新非 theme 的设置
+          const { theme, ...otherSettings } = loaded;
+          settings.value = { ...settings.value, ...otherSettings };
           clipboardEnabled.value = loaded.clipboardMonitor?.enabled || false;
         }
       } catch (err) {
         console.error('Failed to load settings:', err);
+      }
+    }
+
+    async function saveSettings() {
+      try {
+        // 保存主题设置到 localStorage
+        localStorage.setItem('themeSettings', JSON.stringify(settings.value.theme));
+        // 保存其他设置到 Electron
+        await window.electronAPI.settings.set(settings.value);
+      } catch (err) {
+        console.error('Failed to save settings:', err);
+      }
+    }
+
+    function handleBackgroundDrop(event) {
+      event.preventDefault();
+      const file = event.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const base64Data = e.target.result;
+          // 保存到文件系统
+          const result = await window.electronAPI.background.save(base64Data);
+          if (result) {
+            settings.value.theme.backgroundImage = result;
+            saveSettings();
+            showToast('背景图片已保存');
+          } else {
+            showToast('保存失败', 'error');
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    function handleBackgroundDragOver(event) {
+      event.preventDefault();
+    }
+
+    function selectLocalImage() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = async (ev) => {
+            const base64Data = ev.target.result;
+            // 保存到文件系统
+            const result = await window.electronAPI.background.save(base64Data);
+            if (result) {
+              settings.value.theme.backgroundImage = result;
+              saveSettings();
+              showToast('背景图片已保存');
+            } else {
+              showToast('保存失败', 'error');
+            }
+          };
+          reader.readAsDataURL(file);
+        }
+      };
+      input.click();
+    }
+
+    // 添加自定义背景 URL
+    function addCustomBackground() {
+      const url = newBackgroundUrl.value.trim();
+      if (!url) {
+        showToast('请输入图片地址', 'error');
+        return;
+      }
+      // 验证 URL 格式
+      try {
+        new URL(url);
+      } catch {
+        showToast('请输入有效的 URL', 'error');
+        return;
+      }
+
+      // 添加到自定义背景列表
+      if (!settings.value.theme.customBackgrounds) {
+        settings.value.theme.customBackgrounds = [];
+      }
+      settings.value.theme.customBackgrounds.push(url);
+      settings.value.theme.backgroundImage = url;
+      saveSettings();
+      showToast('背景图片已添加');
+      newBackgroundUrl.value = '';
+      showAddBackground.value = false;
+    }
+
+    // 删除自定义背景
+    function deleteCustomBackground(url) {
+      if (!settings.value.theme.customBackgrounds) return;
+      const index = settings.value.theme.customBackgrounds.indexOf(url);
+      if (index > -1) {
+        settings.value.theme.customBackgrounds.splice(index, 1);
+        // 如果删除的是当前选中的背景，清空选择
+        if (settings.value.theme.backgroundImage === url) {
+          settings.value.theme.backgroundImage = '';
+        }
+        saveSettings();
+        showToast('已删除');
       }
     }
 
@@ -93,6 +222,48 @@ const App = {
         localStorage.setItem('templates', JSON.stringify(templates.value));
       } catch (err) {
         console.error('Failed to save templates:', err);
+      }
+    }
+
+    // 草稿自动保存
+    function saveDraft() {
+      if (currentView.value === 'input' && (promptInput.value || templateName.value)) {
+        try {
+          localStorage.setItem('draft', JSON.stringify({
+            promptInput: promptInput.value,
+            templateName: templateName.value,
+            templateCategory: templateCategory.value,
+            timestamp: Date.now()
+          }));
+        } catch (err) {
+          console.error('Failed to save draft:', err);
+        }
+      }
+    }
+
+    function loadDraft() {
+      try {
+        const draft = localStorage.getItem('draft');
+        if (draft) {
+          const data = JSON.parse(draft);
+          if (data.promptInput || data.templateName) {
+            promptInput.value = data.promptInput || '';
+            templateName.value = data.templateName || '';
+            templateCategory.value = data.templateCategory || '';
+            return true;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load draft:', err);
+      }
+      return false;
+    }
+
+    function clearDraft() {
+      try {
+        localStorage.removeItem('draft');
+      } catch (err) {
+        console.error('Failed to clear draft:', err);
       }
     }
 
@@ -174,32 +345,27 @@ const App = {
       try {
         const text = await window.electronAPI.clipboard.read();
         promptInput.value = text || '';
-        currentView.value = 'input';
+        navigateTo('input', { promptInput: text || '' });
       } catch (err) {
         console.error('Failed to paste:', err);
-        currentView.value = 'input';
+        navigateTo('input');
       }
     }
 
     function showPromptInput() {
-      currentView.value = 'input';
-      promptInput.value = '';
-      templateName.value = '';
-      templateCategory.value = '';
+      navigateTo('input', { promptInput: '', templateName: '', templateCategory: '' });
     }
 
     // 保留此函数以备后用
     function newPrompt() {
-      currentView.value = 'input';
-      promptInput.value = '';
-      templateName.value = '';
-      templateCategory.value = '';
+      navigateTo('input', { promptInput: '', templateName: '', templateCategory: '' });
     }
 
     function clearInput() {
       promptInput.value = '';
       templateName.value = '';
       templateCategory.value = '';
+      clearDraft();
     }
 
     function saveToTemplate() {
@@ -234,6 +400,9 @@ const App = {
       templates.value.push(newTemplate);
       saveTemplates();
 
+      // 清除草稿
+      clearDraft();
+
       if (similar.length > 0) {
         showToast(`已保存，发现 ${similar.length} 个相似模板`);
       } else {
@@ -264,19 +433,14 @@ const App = {
     function handleClipboardChanged(text) {
       clipboardAlert.value = { show: true, text: text.substring(0, 100) };
       promptInput.value = text;
-      currentView.value = 'input';
+      navigateTo('input', { promptInput: text });
       setTimeout(() => {
         clipboardAlert.value.show = false;
       }, 3000);
     }
 
     function selectTemplate(template) {
-      currentView.value = 'fill';
-      currentTemplate.value = template;
-      fillValues.value = {};
-      template.variables.forEach(v => {
-        fillValues.value[v.key] = v.default || '';
-      });
+      navigateTo('fill', { template: template });
     }
 
     // 解析模板内容中的变量
@@ -502,11 +666,26 @@ const App = {
     const fillValues = ref({});
 
     function goBack() {
-      if (currentView.value === 'fill') {
+      if (viewHistory.value.length > 0) {
+        const lastState = viewHistory.value.pop();
+        if (lastState.view === 'fill') {
+          currentView.value = 'fill';
+          currentTemplate.value = lastState.template;
+          fillValues.value = lastState.fillValues || {};
+        } else if (lastState.view === 'input') {
+          currentView.value = 'input';
+          promptInput.value = lastState.promptInput || '';
+          templateName.value = lastState.templateName || '';
+          templateCategory.value = lastState.templateCategory || '';
+        } else {
+          currentView.value = 'main';
+        }
+        return;
+      }
+
+      if (currentView.value === 'fill' || currentView.value === 'input') {
         currentView.value = 'main';
         currentTemplate.value = null;
-      } else if (currentView.value === 'input') {
-        currentView.value = 'main';
         promptInput.value = '';
       } else if (showSettings.value) {
         showSettings.value = false;
@@ -518,9 +697,50 @@ const App = {
       }
     }
 
+    function navigateTo(view, options = {}) {
+      const state = {
+        view: currentView.value,
+        timestamp: Date.now()
+      };
+
+      if (currentView.value === 'fill') {
+        state.template = currentTemplate.value;
+        state.fillValues = { ...fillValues.value };
+      } else if (currentView.value === 'input') {
+        state.promptInput = promptInput.value;
+        state.templateName = templateName.value;
+        state.templateCategory = templateCategory.value;
+      }
+
+      if (view === 'fill' && options.template) {
+        currentTemplate.value = options.template;
+        fillValues.value = {};
+        options.template.variables.forEach(v => {
+          fillValues.value[v.key] = v.default || '';
+        });
+      } else if (view === 'input') {
+        promptInput.value = options.promptInput || '';
+        templateName.value = options.templateName || '';
+        templateCategory.value = options.templateCategory || '';
+      }
+
+      viewHistory.value.push(state);
+      currentView.value = view;
+    }
+
     onMounted(async () => {
       await loadSettings();
       await loadTemplates();
+
+      // 加载草稿
+      const hasDraft = loadDraft();
+      if (hasDraft) {
+        navigateTo('input', {
+          promptInput: promptInput.value,
+          templateName: templateName.value,
+          templateCategory: templateCategory.value
+        });
+      }
 
       try {
         windowMode.value = await window.electronAPI.window.getMode();
@@ -545,6 +765,26 @@ const App = {
           goBack();
         }
       });
+
+      // 自动保存草稿
+      let draftSaveTimer = null;
+      watch([promptInput, templateName, templateCategory], () => {
+        if (currentView.value === 'input') {
+          if (draftSaveTimer) clearTimeout(draftSaveTimer);
+          draftSaveTimer = setTimeout(() => {
+            saveDraft();
+          }, 500);
+        }
+      });
+
+      // 自动保存设置
+      let settingsSaveTimer = null;
+      watch(() => JSON.stringify(settings.value.theme), () => {
+        if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+        settingsSaveTimer = setTimeout(() => {
+          saveSettings();
+        }, 300);
+      });
     });
 
     return {
@@ -556,6 +796,8 @@ const App = {
       filteredTemplates,
       currentView,
       showSettings,
+      showAddBackground,
+      newBackgroundUrl,
       settings,
       recentTemplates,
       toast,
@@ -587,6 +829,8 @@ const App = {
       saveToTemplate,
       toggleClipboardMonitor,
       goBack,
+      navigateTo,
+      viewHistory,
       generateFromTemplate,
       showSimilar,
       showDiff,
@@ -595,368 +839,15 @@ const App = {
       togglePin,
       deleteTemplate,
       editTemplate,
-      saveEditTemplate
+      saveEditTemplate,
+      handleBackgroundDrop,
+      handleBackgroundDragOver,
+      selectLocalImage,
+      addCustomBackground,
+      deleteCustomBackground
     };
   },
-  template: `
-    <div class="h-full flex flex-col" :style="accentColorStyle">
-      <!-- Header -->
-      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-        <div class="flex items-center gap-2">
-          <button @click="goBack" class="p-1 hover:bg-gray-700 rounded">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </button>
-          <span class="font-semibold text-accent">Prompt 蒸馏器</span>
-          <span class="text-xs px-2 py-0.5 bg-gray-700 rounded">{{ windowMode === 'mini' ? '迷你' : windowMode === 'standard' ? '标准' : '编辑' }}</span>
-        </div>
-        <button @click="showSettings = true" class="p-1 hover:bg-gray-700 rounded">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- Main Content -->
-      <div class="flex-1 overflow-auto p-4">
-        <!-- Main View -->
-        <template v-if="currentView === 'main'">
-          <!-- Search -->
-          <div class="mb-4">
-            <input
-              v-model="searchQuery"
-              type="text"
-              placeholder="搜索模板..."
-              class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent"
-            >
-          </div>
-
-          <!-- Category Filter -->
-          <div class="flex gap-1 mb-3 overflow-x-auto pb-2">
-            <button
-              v-for="cat in categories"
-              :key="cat"
-              @click="selectedCategory = cat"
-              :class="selectedCategory === cat ? 'bg-accent' : 'bg-gray-700'"
-              class="px-3 py-1 rounded-full text-xs whitespace-nowrap"
-            >
-              {{ cat }}
-            </button>
-          </div>
-
-          <!-- Quick Actions -->
-          <div class="flex gap-2 mb-4">
-            <button
-              @click="toggleClipboardMonitor"
-              :class="clipboardEnabled ? 'bg-accent' : 'bg-gray-700'"
-              class="flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              <span v-if="clipboardEnabled" class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-              {{ clipboardEnabled ? '监听中' : '开启监听' }}
-            </button>
-            <button
-              @click="handlePaste"
-              class="flex-1 py-2 px-4 bg-gray-700 rounded-lg text-sm font-medium hover:bg-gray-600"
-            >
-              输入提示词
-            </button>
-          </div>
-
-          <!-- Clipboard Alert -->
-          <div v-if="clipboardAlert.show" class="mb-4 p-3 bg-blue-900/50 border border-blue-700 rounded-lg">
-            <div class="text-sm text-blue-200">检测到新文本:</div>
-            <div class="text-xs text-gray-400 mt-1 truncate">{{ clipboardAlert.text }}...</div>
-          </div>
-
-          <!-- Template List -->
-          <div class="space-y-2">
-            <div
-              v-for="template in filteredTemplates"
-              :key="template.id"
-              @click="selectTemplate(template)"
-              class="p-3 bg-gray-800 rounded-lg hover:bg-gray-700 cursor-pointer transition-colors"
-            >
-              <div class="flex justify-between items-start mb-1">
-                <div class="flex items-center gap-2">
-                  <span v-if="template.pinned" class="text-yellow-500">📌</span>
-                  <h3 class="font-medium">{{ template.name }}</h3>
-                </div>
-                <div class="flex items-center gap-2">
-                  <button @click="togglePin(template, $event)" class="text-gray-400 hover:text-yellow-500" title="置顶">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M5 5a2 2 0 012-2h6a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2V5zM5 11a2 2 0 012-2h6a2 2 0 012 2v6a2 2 0 01-2 2H7a2 2 0 01-2-2v-6zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5z" />
-                    </svg>
-                  </button>
-                  <button @click="editTemplate(template, $event)" class="text-gray-400 hover:text-blue-500" title="编辑">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                    </svg>
-                  </button>
-                  <button @click="deleteTemplate(template, $event)" class="text-gray-400 hover:text-red-500" title="删除">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                    </svg>
-                  </button>
-                  <!-- M4 功能按钮 -->
-                  <button @click="showSimilar(template, $event)" class="text-gray-400 hover:text-purple-500" title="查重">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
-                      <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
-                    </svg>
-                  </button>
-                  <button @click="showHistory(template, $event)" class="text-gray-400 hover:text-yellow-500" title="历史">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-              <p class="text-sm text-gray-400 line-clamp-2">{{ template.content }}</p>
-              <!-- 显示自动标签 -->
-              <div v-if="template.tags && template.tags.length > 0" class="flex gap-1 mt-1">
-                <span v-for="tag in template.tags" :key="tag" class="text-xs px-2 py-0.5 bg-purple-900/50 text-purple-300 rounded">
-                  {{ tag }}
-                </span>
-              </div>
-              <div class="flex justify-between items-center mt-2">
-                <div class="flex gap-1">
-                  <span v-for="cat in template.category" :key="cat" class="text-xs px-2 py-0.5 bg-gray-700 rounded">
-                    {{ cat }}
-                  </span>
-                </div>
-                <span class="text-xs text-gray-500">{{ template.usage?.count || 0 }}次</span>
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <!-- Prompt Input View -->
-        <template v-else-if="currentView === 'input'">
-          <h2 class="text-lg font-semibold mb-4">保存 Prompt 为模板</h2>
-          <div class="space-y-3 mb-4">
-            <div>
-              <label class="block text-sm text-gray-400 mb-1">模板名称</label>
-              <input
-                v-model="templateName"
-                type="text"
-                placeholder="给模板起个名字"
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent"
-              >
-            </div>
-            <div>
-              <label class="block text-sm text-gray-400 mb-1">分类标签 (逗号分隔)</label>
-              <input
-                v-model="templateCategory"
-                type="text"
-                placeholder="如: 编程, 写作, 翻译"
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent"
-              >
-            </div>
-            <div>
-              <label class="block text-sm text-gray-400 mb-1">Prompt 内容</label>
-              <textarea
-                v-model="promptInput"
-                rows="8"
-                placeholder="在此粘贴或输入你的 Prompt..."
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent resize-none"
-              ></textarea>
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <button
-              @click="clearInput"
-              :disabled="!promptInput"
-              class="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium disabled:opacity-50"
-            >
-              清空
-            </button>
-            <button
-              @click="saveToTemplate"
-              :disabled="!promptInput"
-              class="flex-1 py-2 bg-accent hover:opacity-90 rounded-lg font-medium disabled:opacity-50"
-            >
-              保存到模板库
-            </button>
-          </div>
-        </template>
-
-        <!-- Fill Template View -->
-        <template v-else-if="currentView === 'fill' && currentTemplate">
-          <h2 class="text-lg font-semibold mb-4">{{ currentTemplate.name }}</h2>
-          <div class="space-y-4 mb-6">
-            <div v-for="variable in currentTemplate.variables" :key="variable.key">
-              <label class="block text-sm font-medium mb-1">{{ variable.label }}</label>
-              <input
-                v-if="variable.type !== 'textarea'"
-                v-model="fillValues[variable.key]"
-                type="text"
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent"
-                :placeholder="variable.default"
-              >
-              <textarea
-                v-else
-                v-model="fillValues[variable.key]"
-                rows="4"
-                class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent resize-none"
-                :placeholder="variable.default"
-              ></textarea>
-            </div>
-          </div>
-          <button
-            @click="copyTemplateResult"
-            class="w-full py-3 bg-accent hover:opacity-90 rounded-lg font-medium transition-opacity"
-          >
-            一键复制
-          </button>
-        </template>
-      </div>
-
-      <!-- Settings Drawer -->
-      <div
-        v-if="showSettings"
-        class="fixed inset-0 bg-black/50 z-50 flex justify-end"
-        @click.self="showSettings = false"
-      >
-        <div class="w-80 h-full bg-gray-900 border-l border-gray-700 p-4 overflow-auto">
-          <div class="flex justify-between items-center mb-6">
-            <h2 class="text-lg font-semibold">设置</h2>
-            <button @click="showSettings = false" class="p-1 hover:bg-gray-700 rounded">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-              </svg>
-            </button>
-          </div>
-
-          <div class="space-y-6">
-            <div>
-              <h3 class="text-sm font-medium mb-3">主题色</h3>
-              <div class="flex gap-2">
-                <button
-                  v-for="color in ['#10B981', '#8B5CF6', '#3B82F6', '#F59E0B', '#F43F5E']"
-                  :key="color"
-                  @click="settings.theme.accentColor = color"
-                  :class="settings.theme.accentColor === color ? 'ring-2 ring-white' : ''"
-                  class="w-8 h-8 rounded-full"
-                  :style="{ backgroundColor: color }"
-                ></button>
-              </div>
-            </div>
-
-            <div>
-              <h3 class="text-sm font-medium mb-3">窗口模式</h3>
-              <div class="space-y-2">
-                <button
-                  v-for="mode in ['mini', 'standard', 'editor']"
-                  :key="mode"
-                  @click="window.electronAPI.window.switchMode(mode)"
-                  :class="windowMode === mode ? 'bg-accent' : 'bg-gray-700'"
-                  class="w-full py-2 px-4 rounded-lg text-sm font-medium"
-                >
-                  {{ mode === 'mini' ? '迷你模式 (300x200)' : mode === 'standard' ? '标准模式 (800x600)' : '编辑模式 (1200x800)' }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Edit Modal -->
-      <div v-if="showEditModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div class="bg-gray-900 rounded-lg w-full max-w-md p-4">
-          <h3 class="text-lg font-semibold mb-4">编辑模板</h3>
-          <div class="space-y-3">
-            <div>
-              <label class="block text-sm mb-1">名称</label>
-              <input v-model="editingTemplate.name" type="text" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent">
-            </div>
-            <div>
-              <label class="block text-sm mb-1">分类 (逗号分隔)</label>
-              <input :value="editingTemplate.category?.join(', ')" @input="editingTemplate.category = $event.target.value.split(',').map(s => s.trim()).filter(s => s)" type="text" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent">
-            </div>
-            <div>
-              <label class="block text-sm mb-1">内容 (使用 {{变量名}} 占位)</label>
-              <textarea v-model="editingTemplate.content" rows="6" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-accent resize-none"></textarea>
-            </div>
-          </div>
-          <div class="flex gap-2 mt-4">
-            <button @click="showEditModal = false" class="flex-1 py-2 bg-gray-700 rounded-lg">取消</button>
-            <button @click="saveEditTemplate" class="flex-1 py-2 bg-accent rounded-lg">保存</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Similar Templates Modal (M4.1) -->
-      <div v-if="showSimilarModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div class="bg-gray-900 rounded-lg w-full max-w-md p-4 max-h-[80vh] overflow-auto">
-          <h3 class="text-lg font-semibold mb-4">相似模板</h3>
-          <div v-if="similarTemplates.length === 0" class="text-gray-400 text-center py-4">未发现相似模板</div>
-          <div v-else class="space-y-2">
-            <div v-for="item in similarTemplates" :key="item.template.id" class="p-3 bg-gray-800 rounded-lg">
-              <div class="flex justify-between items-start">
-                <h4 class="font-medium">{{ item.template.name }}</h4>
-                <span class="text-xs text-accent">{{ Math.round(item.similarity * 100) }}% 相似</span>
-              </div>
-              <p class="text-sm text-gray-400 line-clamp-2 mt-1">{{ item.template.content }}</p>
-            </div>
-          </div>
-          <button @click="showSimilarModal = false" class="w-full py-2 bg-gray-700 rounded-lg mt-4">关闭</button>
-        </div>
-      </div>
-
-      <!-- Diff Modal (M4.4) -->
-      <div v-if="showDiffModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div class="bg-gray-900 rounded-lg w-full max-w-lg p-4 max-h-[80vh] overflow-auto">
-          <h3 class="text-lg font-semibold mb-4">版本对比 - {{ compareTemplate?.name }}</h3>
-          <div class="font-mono text-sm">
-            <div v-for="(line, idx) in diffResult" :key="idx" :class="{
-              'bg-green-900/30 text-green-400': line.type === 'add',
-              'bg-red-900/30 text-red-400': line.type === 'remove',
-              'bg-yellow-900/30 text-yellow-400': line.type === 'change',
-              'text-gray-400': line.type === 'same'
-            }" class="px-2 py-0.5">
-              <span v-if="line.type === 'add'">+ </span>
-              <span v-else-if="line.type === 'remove'">- </span>
-              <span v-else-if="line.type === 'change'">~ </span>
-              <span v-else>  </span>
-              {{ line.text || line.text1 || line.text2 }}
-            </div>
-          </div>
-          <button @click="showDiffModal = false" class="w-full py-2 bg-gray-700 rounded-lg mt-4">关闭</button>
-        </div>
-      </div>
-
-      <!-- History Modal (M4.5) -->
-      <div v-if="showHistoryModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div class="bg-gray-900 rounded-lg w-full max-w-md p-4 max-h-[80vh] overflow-auto">
-          <h3 class="text-lg font-semibold mb-4">版本历史 - {{ compareTemplate?.name }}</h3>
-          <div v-if="templateHistory.length === 0" class="text-gray-400 text-center py-4">暂无历史记录</div>
-          <div v-else class="space-y-2">
-            <div v-for="(item, idx) in templateHistory" :key="idx" class="p-3 bg-gray-800 rounded-lg">
-              <div class="flex justify-between text-xs text-gray-400 mb-1">
-                <span>{{ idx + 1 }}</span>
-                <span>{{ new Date(item.timestamp).toLocaleString() }}</span>
-              </div>
-              <p class="text-sm line-clamp-3">{{ item.content }}</p>
-              <button @click="restoreVersion(item)" class="text-xs text-accent hover:underline mt-1">恢复到此版本</button>
-            </div>
-          </div>
-          <button @click="showHistoryModal = false" class="w-full py-2 bg-gray-700 rounded-lg mt-4">关闭</button>
-        </div>
-      </div>
-
-      <!-- Toast -->
-      <div
-        v-if="toast.show"
-        :class="[
-          'fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg',
-          toast.type === 'success' ? 'bg-green-600' : toast.type === 'error' ? 'bg-red-600' : 'bg-gray-600'
-        ]"
-      >
-        {{ toast.message }}
-      </div>
-    </div>
-  `
+  template: '#app-template'
 };
 
 createApp(App).mount('#app');
