@@ -26,5 +26,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: (callback) => {
       ipcRenderer.on('clipboard:changed', (event, text) => callback(text));
     }
+  },
+
+  background: {
+    save: (base64Data) => ipcRenderer.invoke('background:save', base64Data)
   }
 });
