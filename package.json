@@ -17,13 +17,17 @@
       "packagerConfig": {
         "name": "PromptDistillery",
         "executableName": "PromptDistillery",
-        "asar": true
+        "asar": true,
+        "icon": "./assets/icon",
+        "appVersion": "1.0.0"
       },
       "makers": [
         {
           "name": "@electron-forge/maker-squirrel",
           "config": {
-            "name": "PromptDistillery"
+            "name": "PromptDistillery",
+            "setupExe": "PromptDistillery-Setup.exe",
+            "noMsi": true
           }
         },
         {
@@ -49,7 +53,7 @@
     ]
   },
   "keywords": [],
-  "author": "",
+  "author": "Prompt Distillery Team",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
