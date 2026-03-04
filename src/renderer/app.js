@@ -17,7 +17,8 @@ const App = {
         backgroundImage: '',
         glassEffect: true,
         customBackgrounds: []
-      }
+      },
+      autoBackup: true
     });
     const recentTemplates = ref([]);
     const toast = ref({ show: false, message: '', type: 'success' });
@@ -204,6 +205,88 @@ const App = {
         }
         saveSettings();
         showToast('已删除');
+      }
+    }
+
+    // 导出数据
+    async function exportData() {
+      try {
+        const result = await window.electronAPI.data.export();
+        if (result.success) {
+          showToast(`导出成功，共 ${result.count} 个模板`);
+        } else {
+          showToast(result.message, 'error');
+        }
+      } catch (err) {
+        console.error('Export failed:', err);
+        showToast('导出失败', 'error');
+      }
+    }
+
+    // 导入数据
+    async function importData() {
+      try {
+        const result = await window.electronAPI.data.import();
+        if (!result.success) {
+          showToast(result.message, 'error');
+          return;
+        }
+
+        // 合并模板（如果存在）
+        if (result.templates && result.templates.length > 0) {
+          const existingIds = new Set(templates.value.map(t => t.id));
+          let mergedCount = 0;
+
+          result.templates.forEach(template => {
+            // 如果 ID 冲突，生成新 ID
+            if (existingIds.has(template.id)) {
+              template.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+            }
+            templates.value.push(template);
+            existingIds.add(template.id);
+            mergedCount++;
+          });
+
+          saveTemplates();
+          showToast(`导入成功，共 ${mergedCount} 个模板`);
+        } else {
+          showToast('导入成功，但没有找到模板');
+        }
+
+        // 合并主题设置（可选）
+        if (result.themeSettings) {
+          settings.value.theme = { ...settings.value.theme, ...result.themeSettings };
+          localStorage.setItem('themeSettings', JSON.stringify(settings.value.theme));
+          showToast('导入成功，主题设置也已更新');
+        }
+      } catch (err) {
+        console.error('Import failed:', err);
+        showToast('导入失败', 'error');
+      }
+    }
+
+    // 手动备份
+    async function manualBackup() {
+      try {
+        const result = await window.electronAPI.data.backup();
+        if (result.success) {
+          showToast('备份成功');
+        } else {
+          showToast(result.message, 'error');
+        }
+      } catch (err) {
+        console.error('Backup failed:', err);
+        showToast('备份失败', 'error');
+      }
+    }
+
+    // 打开备份目录
+    async function openBackupFolder() {
+      try {
+        await window.electronAPI.data.openBackupFolder();
+      } catch (err) {
+        console.error('Failed to open backup folder:', err);
+        showToast('无法打开备份目录', 'error');
       }
     }
 
@@ -844,7 +927,11 @@ const App = {
       handleBackgroundDragOver,
       selectLocalImage,
       addCustomBackground,
-      deleteCustomBackground
+      deleteCustomBackground,
+      exportData,
+      importData,
+      manualBackup,
+      openBackupFolder
     };
   },
   template: '#app-template'
