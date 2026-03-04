@@ -33,9 +33,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   data: {
-    export: () => ipcRenderer.invoke('data:export'),
+    export: (payload) => ipcRenderer.invoke('data:export', payload),
     import: () => ipcRenderer.invoke('data:import'),
-    backup: () => ipcRenderer.invoke('data:backup'),
+    backup: (payload) => ipcRenderer.invoke('data:backup', payload),
+    autoBackup: (payload) => ipcRenderer.invoke('data:auto-backup', payload),
     getBackupPath: () => ipcRenderer.invoke('data:get-backup-path'),
     openBackupFolder: () => ipcRenderer.invoke('data:open-backup-folder')
   }

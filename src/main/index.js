@@ -467,7 +467,7 @@ ipcMain.handle('background:save', async (event, base64Data) => {
 });
 
 // 数据导出
-ipcMain.handle('data:export', async () => {
+ipcMain.handle('data:export', async (_event, payload = {}) => {
   try {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '导出数据',
@@ -479,23 +479,11 @@ ipcMain.handle('data:export', async () => {
       return { success: false, message: '已取消' };
     }
 
-    // 从 localStorage 读取模板数据
-    let templates = [];
-    try {
-      const stored = localStorage.getItem('templates');
-      templates = stored ? JSON.parse(stored) : [];
-    } catch (e) {
-      console.error('Failed to read templates:', e);
-    }
-
-    // 从 localStorage 读取主题设置
-    let themeSettings = {};
-    try {
-      const stored = localStorage.getItem('themeSettings');
-      themeSettings = stored ? JSON.parse(stored) : {};
-    } catch (e) {
-      console.error('Failed to read theme settings:', e);
-    }
+    // 由渲染进程传入当前模板和主题设置
+    const templates = Array.isArray(payload.templates) ? payload.templates : [];
+    const themeSettings = payload.themeSettings && typeof payload.themeSettings === 'object'
+      ? payload.themeSettings
+      : {};
 
     const exportData = {
       version: '1.1',
@@ -528,7 +516,7 @@ ipcMain.handle('data:import', async () => {
     }
 
     const filePath = result.filePaths[0];
-    const content = fs.readFileSync(filePath, 'utf8');
+    const content = await fs.promises.readFile(filePath, 'utf8');
     const importData = JSON.parse(content);
 
     // 验证数据结构（兼容旧版本 1.0）
@@ -549,27 +537,15 @@ ipcMain.handle('data:import', async () => {
 });
 
 // 手动备份
-ipcMain.handle('data:backup', async () => {
+ipcMain.handle('data:backup', async (_event, payload = {}) => {
   try {
     const backupDir = getBackupPath();
 
-    // 从 localStorage 读取模板数据
-    let templates = [];
-    try {
-      const stored = localStorage.getItem('templates');
-      templates = stored ? JSON.parse(stored) : [];
-    } catch (e) {
-      console.error('Failed to read templates:', e);
-    }
-
-    // 从 localStorage 读取主题设置
-    let themeSettings = {};
-    try {
-      const stored = localStorage.getItem('themeSettings');
-      themeSettings = stored ? JSON.parse(stored) : {};
-    } catch (e) {
-      console.error('Failed to read theme settings:', e);
-    }
+    // 由渲染进程传入当前模板和主题设置
+    const templates = Array.isArray(payload.templates) ? payload.templates : [];
+    const themeSettings = payload.themeSettings && typeof payload.themeSettings === 'object'
+      ? payload.themeSettings
+      : {};
 
     const backupData = {
       version: '1.1',
@@ -602,11 +578,19 @@ ipcMain.handle('data:get-backup-path', () => {
 });
 
 // 打开备份目录
-ipcMain.handle('data:open-backup-folder', () => {
+ipcMain.handle('data:open-backup-folder', async () => {
   const { shell } = require('electron');
   const backupPath = getBackupPath();
-  shell.openPath(backupPath);
-  return true;
+  try {
+    const errorMessage = await shell.openPath(backupPath);
+    if (errorMessage) {
+      return { success: false, message: errorMessage };
+    }
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to open backup folder:', err);
+    return { success: false, message: err && err.message ? err.message : String(err) };
+  }
 });
 
 // 清理旧备份
@@ -633,53 +617,52 @@ function cleanupOldBackups(backupDir) {
   }
 }
 
-// 自动备份
-function autoBackup() {
-  if (settings.autoBackup !== false) { // 默认开启
-    try {
-      const backupDir = getBackupPath();
-
-      // 检查今天是否已有备份
-      const today = new Date().toISOString().slice(0, 10);
-      const files = fs.readdirSync(backupDir).filter(f => f.includes(today));
-      if (files.length > 0) {
-        console.log('Backup already exists for today');
-        return;
-      }
-
-      // 读取数据
-      let templates = [];
-      try {
-        const stored = localStorage.getItem('templates');
-        templates = stored ? JSON.parse(stored) : [];
-      } catch (e) {}
-
-      let themeSettings = {};
-      try {
-        const stored = localStorage.getItem('themeSettings');
-        themeSettings = stored ? JSON.parse(stored) : {};
-      } catch (e) {}
-
-      const backupData = {
-        version: '1.1',
-        exportTime: new Date().toISOString(),
-        templates,
-        themeSettings
-      };
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const fileName = `backup_${timestamp}.json`;
-      const filePath = path.join(backupDir, fileName);
-
-      fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), 'utf8');
-      console.log('Auto backup created:', filePath);
-
-      cleanupOldBackups(backupDir);
-    } catch (err) {
-      console.error('Auto backup failed:', err);
-    }
+// 自动备份（由渲染进程调用）
+ipcMain.handle('data:auto-backup', async (_event, payload = {}) => {
+  // 检查自动备份是否启用
+  if (settings.autoBackup === false) {
+    console.log('Auto backup is disabled');
+    return { success: true, message: '自动备份已关闭' };
   }
-}
+
+  try {
+    const backupDir = getBackupPath();
+
+    // 检查今天是否已有备份
+    const today = new Date().toISOString().slice(0, 10);
+    const files = fs.readdirSync(backupDir).filter(f => f.includes(today));
+    if (files.length > 0) {
+      console.log('Backup already exists for today');
+      return { success: true, message: '今日已存在备份' };
+    }
+
+    // 由渲染进程传入当前模板和主题设置
+    const templates = Array.isArray(payload.templates) ? payload.templates : [];
+    const themeSettings = payload.themeSettings && typeof payload.themeSettings === 'object'
+      ? payload.themeSettings
+      : {};
+
+    const backupData = {
+      version: '1.1',
+      exportTime: new Date().toISOString(),
+      templates,
+      themeSettings
+    };
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `backup_${timestamp}.json`;
+    const filePath = path.join(backupDir, fileName);
+
+    fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), 'utf8');
+    console.log('Auto backup created:', filePath);
+
+    cleanupOldBackups(backupDir);
+    return { success: true, message: '自动备份成功' };
+  } catch (err) {
+    console.error('Auto backup failed:', err);
+    return { success: false, message: '自动备份失败: ' + err.message };
+  }
+});
 
 app.whenReady().then(() => {
   settings = loadSettings();
@@ -690,11 +673,6 @@ app.whenReady().then(() => {
   if (settings.clipboardMonitor?.enabled) {
     startClipboardMonitor();
   }
-
-  // 自动备份
-  setTimeout(() => {
-    autoBackup();
-  }, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

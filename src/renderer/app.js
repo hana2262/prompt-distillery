@@ -211,7 +211,16 @@ const App = {
     // 导出数据
     async function exportData() {
       try {
-        const result = await window.electronAPI.data.export();
+        // 从 localStorage 读取当前数据
+        const templatesData = localStorage.getItem('templates');
+        const themeData = localStorage.getItem('themeSettings');
+
+        const payload = {
+          templates: templatesData ? JSON.parse(templatesData) : [],
+          themeSettings: themeData ? JSON.parse(themeData) : {}
+        };
+
+        const result = await window.electronAPI.data.export(payload);
         if (result.success) {
           showToast(`导出成功，共 ${result.count} 个模板`);
         } else {
@@ -240,7 +249,7 @@ const App = {
           result.templates.forEach(template => {
             // 如果 ID 冲突，生成新 ID
             if (existingIds.has(template.id)) {
-              template.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+              template.id = Date.now().toString() + Math.random().toString(36).slice(2, 11);
             }
             templates.value.push(template);
             existingIds.add(template.id);
@@ -268,7 +277,16 @@ const App = {
     // 手动备份
     async function manualBackup() {
       try {
-        const result = await window.electronAPI.data.backup();
+        // 从 localStorage 读取当前数据
+        const templatesData = localStorage.getItem('templates');
+        const themeData = localStorage.getItem('themeSettings');
+
+        const payload = {
+          templates: templatesData ? JSON.parse(templatesData) : [],
+          themeSettings: themeData ? JSON.parse(themeData) : {}
+        };
+
+        const result = await window.electronAPI.data.backup(payload);
         if (result.success) {
           showToast('备份成功');
         } else {
@@ -814,6 +832,21 @@ const App = {
     onMounted(async () => {
       await loadSettings();
       await loadTemplates();
+
+      // 自动备份
+      setTimeout(async () => {
+        try {
+          const templatesData = localStorage.getItem('templates');
+          const themeData = localStorage.getItem('themeSettings');
+          const payload = {
+            templates: templatesData ? JSON.parse(templatesData) : [],
+            themeSettings: themeData ? JSON.parse(themeData) : {}
+          };
+          await window.electronAPI.data.autoBackup(payload);
+        } catch (err) {
+          console.error('Auto backup failed:', err);
+        }
+      }, 3000);
 
       // 加载草稿
       const hasDraft = loadDraft();

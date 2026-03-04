@@ -88,7 +88,7 @@
 
 #### 备份策略
 - **备份位置**: `{userData}/backups/`
-- **文件命名**: `backup_YYYY-MM-DD_HH-mm-ss.json`
+- **文件命名**: `backup_YYYY-MM-DDTHH-mm-ss.json`
 - **保留数量**: 最多保留 10 个备份
 - **默认开关**: 自动备份默认开启
 
