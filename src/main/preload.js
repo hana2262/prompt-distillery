@@ -30,5 +30,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   background: {
     save: (base64Data) => ipcRenderer.invoke('background:save', base64Data)
+  },
+
+  data: {
+    export: (payload) => ipcRenderer.invoke('data:export', payload),
+    import: () => ipcRenderer.invoke('data:import'),
+    backup: (payload) => ipcRenderer.invoke('data:backup', payload),
+    autoBackup: (payload) => ipcRenderer.invoke('data:auto-backup', payload),
+    getBackupPath: () => ipcRenderer.invoke('data:get-backup-path'),
+    openBackupFolder: () => ipcRenderer.invoke('data:open-backup-folder')
   }
 });

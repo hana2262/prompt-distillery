@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -24,7 +24,8 @@ const DEFAULT_SETTINGS = {
     accentColor: '#10B981',
     backgroundImage: '',
     glassEffect: true
-  }
+  },
+  autoBackup: true
 };
 
 let clipboardMonitorTimer = null;
@@ -433,6 +434,16 @@ function getBackgroundPath() {
   return bgPath;
 }
 
+// 备份目录路径
+function getBackupPath() {
+  const userDataPath = app.getPath('userData');
+  const backupDir = path.join(userDataPath, 'backups');
+  if (!fs.existsSync(backupDir)) {
+    fs.mkdirSync(backupDir, { recursive: true });
+  }
+  return backupDir;
+}
+
 // 保存背景图片到文件系统
 ipcMain.handle('background:save', async (event, base64Data) => {
   try {
@@ -452,6 +463,204 @@ ipcMain.handle('background:save', async (event, base64Data) => {
   } catch (err) {
     console.error('Failed to save background image:', err);
     return null;
+  }
+});
+
+// 数据导出
+ipcMain.handle('data:export', async (_event, payload = {}) => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出数据',
+      defaultPath: `prompt-distillery-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON Files', extensions: ['json'] }]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, message: '已取消' };
+    }
+
+    // 由渲染进程传入当前模板和主题设置
+    const templates = Array.isArray(payload.templates) ? payload.templates : [];
+    const themeSettings = payload.themeSettings && typeof payload.themeSettings === 'object'
+      ? payload.themeSettings
+      : {};
+
+    const exportData = {
+      version: '1.1',
+      exportTime: new Date().toISOString(),
+      templates,
+      themeSettings
+    };
+
+    fs.writeFileSync(result.filePath, JSON.stringify(exportData, null, 2), 'utf8');
+    console.log('Data exported to:', result.filePath);
+
+    return { success: true, message: '导出成功', count: templates.length };
+  } catch (err) {
+    console.error('Failed to export data:', err);
+    return { success: false, message: '导出失败: ' + err.message };
+  }
+});
+
+// 数据导入
+ipcMain.handle('data:import', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '导入数据',
+      filters: [{ name: 'JSON Files', extensions: ['json'] }],
+      properties: ['openFile']
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, message: '已取消' };
+    }
+
+    const filePath = result.filePaths[0];
+    const content = await fs.promises.readFile(filePath, 'utf8');
+    const importData = JSON.parse(content);
+
+    // 验证数据结构（兼容旧版本 1.0）
+    if (!importData.templates) {
+      return { success: false, message: '无效的备份文件格式' };
+    }
+
+    return {
+      success: true,
+      message: '导入成功',
+      templates: importData.templates || [],
+      themeSettings: importData.themeSettings || {}
+    };
+  } catch (err) {
+    console.error('Failed to import data:', err);
+    return { success: false, message: '导入失败: ' + err.message };
+  }
+});
+
+// 手动备份
+ipcMain.handle('data:backup', async (_event, payload = {}) => {
+  try {
+    const backupDir = getBackupPath();
+
+    // 由渲染进程传入当前模板和主题设置
+    const templates = Array.isArray(payload.templates) ? payload.templates : [];
+    const themeSettings = payload.themeSettings && typeof payload.themeSettings === 'object'
+      ? payload.themeSettings
+      : {};
+
+    const backupData = {
+      version: '1.1',
+      exportTime: new Date().toISOString(),
+      templates,
+      themeSettings
+    };
+
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `backup_${timestamp}.json`;
+    const filePath = path.join(backupDir, fileName);
+
+    fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), 'utf8');
+    console.log('Backup created:', filePath);
+
+    // 清理旧备份（最多保留 10 个）
+    cleanupOldBackups(backupDir);
+
+    return { success: true, message: '备份成功' };
+  } catch (err) {
+    console.error('Failed to create backup:', err);
+    return { success: false, message: '备份失败: ' + err.message };
+  }
+});
+
+// 获取备份目录路径
+ipcMain.handle('data:get-backup-path', () => {
+  return getBackupPath();
+});
+
+// 打开备份目录
+ipcMain.handle('data:open-backup-folder', async () => {
+  const { shell } = require('electron');
+  const backupPath = getBackupPath();
+  try {
+    const errorMessage = await shell.openPath(backupPath);
+    if (errorMessage) {
+      return { success: false, message: errorMessage };
+    }
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to open backup folder:', err);
+    return { success: false, message: err && err.message ? err.message : String(err) };
+  }
+});
+
+// 清理旧备份
+function cleanupOldBackups(backupDir) {
+  try {
+    const files = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith('backup_') && f.endsWith('.json'))
+      .map(f => ({
+        name: f,
+        path: path.join(backupDir, f),
+        time: fs.statSync(path.join(backupDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.time - a.time);
+
+    // 保留最新的 10 个备份
+    if (files.length > 10) {
+      files.slice(10).forEach(f => {
+        fs.unlinkSync(f.path);
+        console.log('Deleted old backup:', f.name);
+      });
+    }
+  } catch (err) {
+    console.error('Failed to cleanup old backups:', err);
+  }
+}
+
+// 自动备份（由渲染进程调用）
+ipcMain.handle('data:auto-backup', async (_event, payload = {}) => {
+  // 检查自动备份是否启用
+  if (settings.autoBackup === false) {
+    console.log('Auto backup is disabled');
+    return { success: true, message: '自动备份已关闭' };
+  }
+
+  try {
+    const backupDir = getBackupPath();
+
+    // 检查今天是否已有备份
+    const today = new Date().toISOString().slice(0, 10);
+    const files = fs.readdirSync(backupDir).filter(f => f.includes(today));
+    if (files.length > 0) {
+      console.log('Backup already exists for today');
+      return { success: true, message: '今日已存在备份' };
+    }
+
+    // 由渲染进程传入当前模板和主题设置
+    const templates = Array.isArray(payload.templates) ? payload.templates : [];
+    const themeSettings = payload.themeSettings && typeof payload.themeSettings === 'object'
+      ? payload.themeSettings
+      : {};
+
+    const backupData = {
+      version: '1.1',
+      exportTime: new Date().toISOString(),
+      templates,
+      themeSettings
+    };
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `backup_${timestamp}.json`;
+    const filePath = path.join(backupDir, fileName);
+
+    fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), 'utf8');
+    console.log('Auto backup created:', filePath);
+
+    cleanupOldBackups(backupDir);
+    return { success: true, message: '自动备份成功' };
+  } catch (err) {
+    console.error('Auto backup failed:', err);
+    return { success: false, message: '自动备份失败: ' + err.message };
   }
 });
 

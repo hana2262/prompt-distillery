@@ -1,6 +1,6 @@
 {
   "name": "prompt-distillery-v2",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AI 驱动的 Prompt 整理工具",
   "main": "src/main/index.js",
   "scripts": {
@@ -19,7 +19,7 @@
         "executableName": "PromptDistillery",
         "asar": true,
         "icon": "./assets/icon",
-        "appVersion": "1.0.0"
+        "appVersion": "1.1.0"
       },
       "makers": [
         {
